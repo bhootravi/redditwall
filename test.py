@@ -73,18 +73,20 @@ bad_url_file = '.not jpg urls'
 
 #Folder hadling
 imgdir = args.dest
-if platform.system() == 'Windows' and '~user' not in args.dest:
-	imgdir = args.dest.replace('~','~user')
+#if platform.system() == 'Windows' and '~user' not in args.dest:
+	#imgdir = args.dest.replace('~','~user')
 #fix this for windows 
 imgdir = os.path.abspath(os.path.expanduser(imgdir)) 
 
-x = '~user' if platform.system() == 'Windows' else '~'
-home = os.path.expanduser(x)
+home = os.path.expanduser('~')
+
+ff = False
 
 if not os.path.isfile(path.join(home, subreddit_file)):
-	with open(path.join(home, subreddit_file),'w') as f: 
-		f.write('http://www.reddit.com/r/EarthPorn/')
+	#with open(path.join(home, subreddit_file),'w') as f: 
+		#f.write('http://www.reddit.com/r/EarthPorn/')
 	args.add = 'http://www.reddit.com/r/EarthPorn/'
+	ff = False
 
 #TODO check for duplicates
 if args.add:
@@ -97,7 +99,10 @@ if args.add:
 			os.makedirs(directory)
 			open(path.join(imgdir,bad_url_file), 'w').close()
 		with open(path.join(home, subreddit_file),'a') as f: 
-			f.write('\n' + args.add)
+			if ff:
+				f.write(args.add)
+			else:
+				f.write('\n' + args.add)
 
 if args.task == 'update':
 	update_repo = True
