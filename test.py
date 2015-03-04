@@ -2,12 +2,12 @@
 #Set Wallpaper
 #options:
 #destination dir
-#		update frequency(from reddit and wallpaper)
+#	update frequency(from reddit and wallpaper)
 #		subreddit to fetch (validate input)
 #		image ordering(random, latest, previous)
-#		update image repo
-#		change wallpaper 
-#		both
+#	update image repo
+#	change wallpaper 
+#	both
 #		add sub-reddit
 #	remove sub-reddit
 #	reset prefrences
@@ -27,6 +27,7 @@ import re
 import argparse
 import subprocess
 import time
+import threading
 
 #from _winreg import *
 from sys import executable
@@ -43,10 +44,10 @@ parser.add_argument('-d', '--dest', help="Destination of stored images",
 #parser.add_argument('-l', '--link', help='''Link to the sub-reddit. 
 					#Format:{http://www.reddit.com/r/xxxx/{xxx}/(nothing here)}''', 
 					#default='http://www.reddit.com/r/earthporn/')
-parser.add_argument('-o', '--ordering', help="The order in which next wallpaper will be set", 
-					choices=['random', 'latest', 'previous'],
-					default='random')
-parser.add_argument('-r', '--image-rate', help="(Integral)Rate of image repo update(in hours), Range(0-2000)",
+#parser.add_argument('-o', '--ordering', help="The order in which next wallpaper will be set", 
+					#choices=['random', 'latest', 'previous'],
+					#default='random')
+parser.add_argument('-r', '--update-rate', help="(Integral)Rate of image repo update(in hours), Range(0-2000)",
 					type = int,
 					default = 24)
 parser.add_argument('-w', '--wallpaper-rate', help="(Integral)Rate of wallpaper update(in minutes), Range(0-21600)",
@@ -58,12 +59,13 @@ parser.add_argument('-t', '--task', help="Update the images repo",
 parser.add_argument('-a', '--add', help="add a subreddit")
 args = parser.parse_args()
 
-if args.image_rate not in range(0,2000) or args.wallpaper_rate not in range(0,21600):
+if args.update_rate not in range(0,2000) or args.wallpaper_rate not in range(0,21600):
 	parser.print_help()
 	exit(-1)
 
-valid_chars = "-_.[]() %s%s" % (string.ascii_letters, string.digits)
+valid_chars = "-_.[] %s%s" % (string.ascii_letters, string.digits)
 
+settings_file = ".redditwall_settings"
 last_file = '.last'
 subreddit_file = '.subreddits'
 bad_url_file = '.not jpg urls'
@@ -94,15 +96,22 @@ if args.add:
 		args.add += '/' if not args.add.endswith('/') else ''
 		x = args.add.index('/r/')
 		subreddit = args.add[x+3:args.add.index('/', x+4)]
-		directory = path.join(imgdir, subreddit)
-		if not os.path.exists(directory):
-			os.makedirs(directory)
-			open(path.join(imgdir,bad_url_file), 'w').close()
-		with open(path.join(home, subreddit_file),'a') as f: 
-			if ff:
-				f.write(args.add)
-			else:
-				f.write('\n' + args.add)
+		
+		existing = set()
+		with open(path.join(home, subreddit_file),'r') as f: 
+			existing.add(f.readline().lower())
+		if args.add.lower() not in existing:
+			with open(path.join(home, subreddit_file),'a') as f: 
+				if ff:
+					f.write(args.add)
+				else:
+					f.write('\n' + args.add)
+			
+			directory = path.join(imgdir, subreddit)
+			if not os.path.exists(directory):
+				os.makedirs(directory)
+				open(path.join(imgdir,bad_url_file), 'w').close()
+		
 
 if args.task == 'update':
 	update_repo = True
@@ -120,109 +129,143 @@ else:
 #add url validation and extended support(weekly, monthly, etc)
 #subreddit_link = args.link
 
+s = ''
+#if settings file does not exist
+if not os.path.isfile(path.join(home, settings_file)):
+	s += imgdir + '\n' + str(args.update_rate) + '\n' \
+		+ str(args.wallpaper_rate) + '\n'
+	update_interval = args.update_rate * 60 * 60
+	change_interval = args.wallpaper_rate * 60
+#if settings file exists
+else:
+	with open(path.join(home, settings_file), 'r') as f:
+		#print imgdir
+		x = f.readline().strip()
+		#new value or stored value
+		imgdir = imgdir if imgdir != os.path.abspath(os.path.expanduser('~/Pictures/')) else x
+		s += imgdir
+		s += '\n'
+		
+		#print args.update_rate
+		x = f.readline().strip()
+		#new value or stored value
+		update_interval = (args.update_rate) if  args.update_rate != 24 else int(x)
+		s += str(update_interval)
+		update_interval *= 60*60
+		s += '\n'
+		
+		#print args.wallpaper_rate
+		x = f.readline().strip()
+		#new value or stored value
+		change_interval = str(args.wallpaper_rate) if args.wallpaper_rate != 30 else int(x)
+		s += str(change_interval)
+		change_interval *= 60
+		s += '\n'
+
+#write final values
+with open(path.join(home, settings_file), 'w') as f:
+	f.write(s)
 
 
 #print os.path.abspath(__file__)
 #print args.ordering
-#print args.image_rate
-#print args.wallpaper_rate
-#print imgdir
-#print subreddit_link
 
+update_interval = args.update_rate * 60 * 60
+change_interval = args.wallpaper_rate * 60
 
 #print home + subreddit_file
 ff = open(path.join(home, subreddit_file),'r')
 lines = [line.strip() for line in ff]
 imgdir_base = imgdir
 subreddit_list = []
-for subreddit_link in lines:
-	x = subreddit_link.index('/r/')
-	subreddit = subreddit_link[x+3:subreddit_link.index('/', x+4)]
-	imgdir = os.path.join(imgdir_base,subreddit) 
+
+def update(subreddit_link):
+	global imgdir, last_file, bad_url_file
 	
-	subreddit_list.append(subreddit)
+	threading.Timer(update_interval, update).start()
 	
-	if update_repo:
-		#Link id of the last image
-		if os.path.isfile(path.join(imgdir,last_file)):
-			x = time.time() - (os.path.getmtime(path.join(imgdir,last_file)))
-			if x < 2*24*60*60:
-				with open(path.join(imgdir,last_file),'r') as f: 
-					last = f.read()
-			else:
-				last = ''
+	#Link id of the last image
+	if os.path.isfile(path.join(imgdir,last_file)):
+		x = time.time() - (os.path.getmtime(path.join(imgdir,last_file)))
+		if x < 2*24*60*60:
+			with open(path.join(imgdir,last_file),'r') as f: 
+				last = f.read()
 		else:
 			last = ''
-		print subreddit_link
-		header={'user-agent':'my test application 1.0'}
-		if last:
-			r = requests.get(subreddit_link + '.json?limit=50&before=' + last,headers=header)
-			#urllib2.urlopen(url).read()
-		else:
-			r = requests.get(subreddit_link + '.json?limit=20', headers=header)
-		data = r.json()
-		#pprint(data)
+	else:
+		last = ''
+	print subreddit_link
+	header={'user-agent':'my test application 1.0'}
+	if last:
+		r = requests.get(subreddit_link + '.json?limit=50&before=' + last,headers=header)
+		#urllib2.urlopen(url).read()
+	else:
+		r = requests.get(subreddit_link + '.json?limit=20', headers=header)
+	data = r.json()
+	#pprint(data)
 
-		#Retrieve all new images in reverse order(to get the last id in the var last_file)
-		for post in reversed(data['data']['children']):
-			
-			f = open(path.join(imgdir,bad_url_file), 'a') 
-			
-			#make the filename valid 
-			title = post['data']['title'].replace(' ', '_').replace('*', 'x')
-			title = ''.join(c for c in title if c in valid_chars)[:250]
-			#unicodedata.normalize('NFKD', title).encode('ascii','ignore')
-			url = post['data']['url']
-			
-			#detect imgur album
-			if 'imgur' in url and '/a/' in url:
-				print "album :'( " 
-				#use external script
-				#continue
-			#fix for urls with further args
-			elif 'imgur' in url and '.jpg' in url:
-				url = url[:url.index('.jpg') + 4]
-				#print url
-			#imgur page links fix
-			elif 'imgur' in url and not url.endswith('.jpg'):
-				url+= '.jpg'
-			#flickr fix 
-			elif 'flickr' in url:
-				html = urllib2.urlopen(url).read()
-				#try original
-				img_url = re.findall(r'https:[^":]*_o\.jpg', html)
-				#else fetch large
-				if len(img_url) == 0:
-					img_url = re.findall(r'https:[^":]*_b\.jpg', html)
-				#if failed to find large's url
-				if len(img_url) != 0:
-					url = img_url[0].replace('\/', '/')
-				#print url
-			#check for pinned text posts
-			if url.endswith('.jpg'):
-				last = post['data']['name']
-				#print url
-				#print imgdir
-				try:
-					print title
-					response=urllib2.urlopen(url)
-					f_image = open(path.join(imgdir,title + '.jpg'),'wb')
-					f_image.write(response.read())
-					f_image.close()
-					#Store the link id of the last image fetched for next use
-					with open(path.join(imgdir,last_file),'w') as f: 
-						f.write(last)
-				except Exception:
-					#import traceback
-					#checksLogger.error('generic exception: ' + traceback.format_exc())
-					print url
-					f.write(url + '\n')
-			else:
+	#Retrieve all new images in reverse order(to get the last id in the var last_file)
+	for post in reversed(data['data']['children']):
+		
+		f = open(path.join(imgdir,bad_url_file), 'a') 
+		
+		#make the filename valid 
+		title = post['data']['title'].replace(' ', '_').replace('*', 'x')
+		title = ''.join(c for c in title if c in valid_chars)[:250]
+		#unicodedata.normalize('NFKD', title).encode('ascii','ignore')
+		url = post['data']['url']
+		
+		#detect imgur album
+		if 'imgur' in url and '/a/' in url:
+			print "album :'( " 
+			#use external script
+			#continue
+		#fix for urls with further args
+		elif 'imgur' in url and '.jpg' in url:
+			url = url[:url.index('.jpg') + 4]
+			#print url
+		#imgur page links fix
+		elif 'imgur' in url and not url.endswith('.jpg'):
+			url+= '.jpg'
+		#flickr fix 
+		elif 'flickr' in url:
+			html = urllib2.urlopen(url).read()
+			#try original
+			img_url = re.findall(r'https:[^":]*_o\.jpg', html)
+			#else fetch large
+			if len(img_url) == 0:
+				img_url = re.findall(r'https:[^":]*_b\.jpg', html)
+			#if failed to find large's url
+			if len(img_url) != 0:
+				url = img_url[0].replace('\/', '/')
+			#print url
+		#check for pinned text posts
+		if url.endswith('.jpg'):
+			last = post['data']['name']
+			#print url
+			#print imgdir
+			try:
+				print title
+				response=urllib2.urlopen(url)
+				f_image = open(path.join(imgdir,title + '.jpg'),'wb')
+				f_image.write(response.read())
+				f_image.close()
+				#Store the link id of the last image fetched for next use
+				with open(path.join(imgdir,last_file),'w') as f: 
+					f.write(last)
+			except Exception:
+				#import traceback
+				#checksLogger.error('generic exception: ' + traceback.format_exc())
+				print url
 				f.write(url + '\n')
+		else:
+			f.write(url + '\n')
 
-#do this only once
-if change_wallpaper:
-	#imgdir += 'EarthPorn/'
+def change():
+	global imgdir_base, subreddit_list, imgdir
+	
+	threading.Timer(change_interval, change).start()
+	
 	imgs = []
 	#extract all images downloaded by this program(improve this method)
 	#find subdirs using listdir and use listdir on thos subdirs
@@ -242,7 +285,7 @@ if change_wallpaper:
 	print imgdir + img
 	if platform.system() == 'Windows':
 		#Reg code only for win 8
-		from _winreg import *
+		from _winreg import OpenKey, HKEY_CURRENT_USER, KEY_SET_VALUE, SetValueEx,REG_SZ, CloseKey
 		subkey  = 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'
 		script  = os.path.abspath(__file__)
 		pythonw = path.join(path.dirname(executable), 'pythonw.exe')
@@ -262,9 +305,13 @@ if change_wallpaper:
 						+ ' --group Wallpaper --group image --key wallpaper'
 					if subprocess.check_output(s.split(' ')).strip() != '':
 						s = 'kwriteconfig --file plasma-desktop-appletsrc --group Containments --group ' + str(n)\
-							+ ' --group Wallpaper --group image --key wallpaper ' + path.join(imgdir,img)
-						print s
-						subprocess.call(s.split(' '))
+							+ ' --group Wallpaper --group image --key wallpaper'
+						s = s.split(' ')
+						s.insert(len(s), (path.join(imgdir,img)))
+						for xx in s:
+							print xx,
+						print
+						subprocess.call(s)
 						x -= 1
 						img = random.choice(imgs)
 						while not img.endswith('.jpg'):
@@ -274,15 +321,41 @@ if change_wallpaper:
 			FNULL = open(os.devnull, 'w')
 			subprocess.call(['plasma-desktop'], stdout=FNULL, stderr=FNULL)
 		elif 'gnome' in desk_env.tolower():
-			s = 'gsettings set org.gnome.desktop.background picture-uri ' + path.join(imgdir,img)
-			subprocess.call(s.split(' '))
+			s = 'gsettings set org.gnome.desktop.background picture-uri' 
+			s = s.split(' ')
+			s.insert(len(s), (path.join(imgdir,img)))
+			subprocess.call(s)
 		elif 'mate' in desk_env.tolower():
-			s = 'gconftool-2 -type string -set /desktop/gnome/background/picture_filename \"' + path.join(imgdir,img) + '\"'
-			subprocess.call(s.split(' '))
+			s = 'gconftool-2 -type string -set /desktop/gnome/background/picture_filename \"'
+			s = s.split(' ')
+			s.insert(len(s), (path.join(imgdir,img)))
+			s.insert(len(s), '\"')
+			subprocess.call(s)
 		#elif 'xfce' in desk_env.tolower():
 			#echo -e '# xfce backdrop list\n/path/to/image.png' > $HOME/.config/xfce4/desktop/backdrops.list 
 			#xfdesktop --reload
 			#print
 		else:
 			print 'get some other desktop-environment'
+
+for subreddit_link in lines:
+	x = subreddit_link.index('/r/')
+	subreddit = subreddit_link[x+3:subreddit_link.index('/', x+4)]
+	imgdir = os.path.join(imgdir_base,subreddit) 
+	
+	directory = path.join(imgdir, subreddit)
+	if not os.path.exists(directory):
+		os.makedirs(directory)
+		open(path.join(imgdir,bad_url_file), 'w').close()
+	
+	subreddit_list.append(subreddit)
+	
+	if update_repo:
+		update(subreddit_link)
+
+#do this only once
+if change_wallpaper:
+	#imgdir += 'EarthPorn/'
+	change()
+	
 print 'done'
